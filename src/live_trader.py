@@ -5,13 +5,10 @@ import plotly.graph_objects as go
 import pandas as pd
 from datetime import datetime, timedelta
 import json
-import os
-import threading
-from io import StringIO
+import sqlite3
 
 from data_handler import DataHandler
 from strategy import MovingAverageCrossover, RSIStrategy, BollingerBandsStrategy
-from optimizer import Optimizer
 
 # --- Configuration ---
 STRATEGIES = {
@@ -24,70 +21,31 @@ STRATEGY_VISUALS = {
     'RSI Strategy': {'color': 'magenta', 'symbol': 'diamond'},
     'Bollinger Bands Strategy': {'color': 'yellow', 'symbol': 'square'}
 }
-PARAMS_FILE = 'optimal_params.json'
+DB_FILE = 'strategy_parameters.db'
 PRICE_UPDATE_INTERVAL_SECONDS = 30
-OPTIMIZATION_INTERVAL_MINUTES = 5
 
-# --- Global State Management ---
+# --- Global State ---
 app_state = {
-    'price_history': pd.DataFrame(),
-    'optimal_params': {},
-    'optimization_threads': {}, # Manages multiple threads
-    'last_optimization_time': 'Never'
+    'price_history': pd.DataFrame()
 }
 
 # --- Helper Functions ---
-def load_optimal_params():
-    if os.path.exists(PARAMS_FILE):
-        with open(PARAMS_FILE, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_optimal_params(params):
-    # Use a lock to prevent race conditions when saving the file from multiple threads
-    lock = threading.Lock()
-    with lock:
-        with open(PARAMS_FILE, 'w') as f:
-            json.dump(params, f, indent=4)
-
-def optimize_single_strategy(ticker, strategy_name, strategy_class):
-    """Optimizes a single strategy and updates the shared JSON file."""
-    print(f"[{datetime.now()}] Starting optimization for {strategy_name} on {ticker}...")
-    
-    data_handler = DataHandler([ticker])
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5*365)
-    historical_data = data_handler.get_historical_data(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-
-    if historical_data.empty:
-        print(f"Could not fetch data for {ticker}. Aborting optimization for {strategy_name}.")
-        return
-
-    param_info = strategy_class.get_parameter_info()
-    param_ranges = {p: range(info['range'][0], info['range'][1] + 1, info['range'][2]) for p, info in param_info.items()}
-    
-    optimizer = Optimizer(strategy_class, historical_data)
-    results_df = optimizer.run_optimization(param_ranges)
-
-    if not results_df.empty:
-        best_params = results_df.sort_values(by='Final Value', ascending=False).iloc[0].to_dict()
-        param_names = list(param_ranges.keys())
-        optimal = {p: int(best_params[p]) for p in param_names}
-        
-        all_saved_params = load_optimal_params()
-        key = f"{ticker.upper()}_{strategy_name}"
-        all_saved_params[key] = optimal
-        save_optimal_params(all_saved_params)
-        
-    app_state['last_optimization_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{datetime.now()}] Optimization for {strategy_name} on {ticker} complete.")
-
+def get_params_from_db(ticker, strategy_name):
+    """Fetches the latest optimal parameters from the database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT parameters, last_updated FROM optimization_results WHERE ticker = ? AND strategy_name = ?", (ticker, strategy_name))
+    result = cursor.fetchone()
+    conn.close()
+    if result:
+        return json.loads(result[0]), datetime.fromisoformat(result[1])
+    return None, None
 
 # --- Initialize Dash App ---
 app = dash.Dash(__name__)
 
 app.layout = html.Div([
-    html.H1('Live Adaptive Strategy Tracker', style={'textAlign': 'center'}),
+    html.H1('Live Strategy Tracker (with Pre-Optimized Parameters)', style={'textAlign': 'center'}),
     
     html.Div([
         html.Div([
@@ -109,8 +67,7 @@ app.layout = html.Div([
     html.Div(id='status-bar', style={'textAlign': 'center', 'padding': '10px'}),
     dcc.Graph(id='live-price-chart'),
     
-    dcc.Interval(id='price-interval', interval=PRICE_UPDATE_INTERVAL_SECONDS * 1000, n_intervals=0),
-    dcc.Interval(id='optimization-interval', interval=OPTIMIZATION_INTERVAL_MINUTES * 60 * 1000, n_intervals=0)
+    dcc.Interval(id='price-interval', interval=PRICE_UPDATE_INTERVAL_SECONDS * 1000, n_intervals=0)
 ])
 
 # --- Main Callback for Live Updates ---
@@ -139,8 +96,6 @@ def update_live_chart(n, ticker, selected_strategies):
         app_state['price_history'] = pd.concat([app_state['price_history'], new_row])
         app_state['price_history'] = app_state['price_history'][~app_state['price_history'].index.duplicated(keep='last')]
     
-    app_state['optimal_params'] = load_optimal_params()
-    
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=app_state['price_history'].index,
@@ -152,13 +107,12 @@ def update_live_chart(n, ticker, selected_strategies):
     
     if selected_strategies:
         for name in selected_strategies:
-            key = f"{ticker}_{name}"
-            params = app_state['optimal_params'].get(key)
-            param_status = "(Optimal)"
+            params, last_updated = get_params_from_db(ticker, name)
+            param_status = f"(Optimal as of {last_updated.strftime('%Y-%m-%d %H:%M')})" if params else "(Default)"
+            
             if not params:
                 param_info = STRATEGIES[name].get_parameter_info()
                 params = {p: info['default'] for p, info in param_info.items()}
-                param_status = "(Default)"
 
             strategy_obj = STRATEGIES[name](**params)
             signals_df = strategy_obj.generate_signals(app_state['price_history'])
@@ -172,44 +126,11 @@ def update_live_chart(n, ticker, selected_strategies):
             
             status_texts.append(f"{name} {param_status}: {params}")
 
-    fig.update_layout(title=f'Live Adaptive Signals for {ticker}', template='plotly_dark', legend_title="Legend")
+    fig.update_layout(title=f'Live Signals for {ticker}', template='plotly_dark', legend_title="Legend")
     
-    # Check status of all optimization threads
-    running_optimizations = [name for name, thread in app_state['optimization_threads'].items() if thread.is_alive()]
-    opt_status = f"RUNNING ({', '.join(running_optimizations)})" if running_optimizations else "IDLE"
-    
-    status_bar_text = f"Live Price: {status_texts[0]} | Optimization: {opt_status} (Last Run: {app_state['last_optimization_time']}) | {' | '.join(status_texts[1:])}"
+    status_bar_text = f" | ".join(status_texts)
     return fig, status_bar_text
-
-# --- Callback for Periodic Optimization ---
-@app.callback(
-    Output('ticker-input', 'style'), # Dummy output
-    [Input('optimization-interval', 'n_intervals'),
-     Input('ticker-input', 'value')],
-    prevent_initial_call=True
-)
-def trigger_optimization(n, ticker):
-    if not ticker:
-        return {'width': '100%'}
-
-    # Launch a new thread for each strategy if it's not already running
-    for name, strategy_class in STRATEGIES.items():
-        thread = app_state['optimization_threads'].get(name)
-        if not thread or not thread.is_alive():
-            new_thread = threading.Thread(target=optimize_single_strategy, args=(ticker.upper(), name, strategy_class))
-            app_state['optimization_threads'][name] = new_thread
-            new_thread.start()
-        else:
-            print(f"Optimization for {name} is already in progress. Skipping.")
-            
-    return {'width': '100%'}
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    # On startup, launch an optimization thread for each strategy
-    for name, strategy_class in STRATEGIES.items():
-        thread = threading.Thread(target=optimize_single_strategy, args=('NVDA', name, strategy_class))
-        app_state['optimization_threads'][name] = thread
-        thread.start()
-    
     app.run_server(debug=False)

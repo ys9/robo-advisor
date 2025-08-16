@@ -1,20 +1,25 @@
 import sqlite3
 import json
 from datetime import datetime, timedelta
-import threading
+import concurrent.futures
+import os
 
 from data_handler import DataHandler
 from strategy import MovingAverageCrossover, RSIStrategy, BollingerBandsStrategy
 from optimizer import Optimizer
 
 # --- Configuration ---
-TICKER_LIST_FILE = 'ticker_symbols.txt'  # A file with one ticker symbol per line
+TICKER_LIST_FILE = 'tickers.txt'  # A file with one ticker symbol per line
 STRATEGIES = {
     'Moving Average Crossover': MovingAverageCrossover,
     'RSI Strategy': RSIStrategy,
     'Bollinger Bands Strategy': BollingerBandsStrategy
 }
 OPTIMIZATION_TIME_DELTA_HOURS = 24 # Re-optimize if params are older than this
+# --- CPU Configuration ---
+# Set the number of CPU cores to use for parallel processing.
+# Adjust this value based on your machine's specifications (e.g., 20 for your machine).
+MAX_WORKERS = 10 # A safe default, can be increased to 20.
 
 def get_tickers_from_file(filename):
     """Reads a list of tickers from a text file."""
@@ -44,8 +49,11 @@ def update_parameters_in_db(conn, ticker, strategy_name, params):
     conn.commit()
 
 def run_optimization_for_ticker(ticker):
-    """Performs optimization for all strategies for a single ticker."""
-    print(f"--- Processing Ticker: {ticker} ---")
+    """
+    Performs optimization for all strategies for a single ticker.
+    This function is designed to be run in its own process.
+    """
+    print(f"--- [Process {os.getpid()}] Processing Ticker: {ticker} ---")
     conn = sqlite3.connect('strategy_parameters.db')
     cursor = conn.cursor()
     
@@ -57,12 +65,11 @@ def run_optimization_for_ticker(ticker):
     if historical_data.empty:
         print(f"Could not fetch data for {ticker}. Skipping.")
         conn.close()
-        return
+        return f"Failed to fetch data for {ticker}"
 
     for name, strategy_class in STRATEGIES.items():
         last_update = get_last_update_time(cursor, ticker, name)
         
-        # Check if we need to re-optimize
         if last_update and (datetime.now() - last_update) < timedelta(hours=OPTIMIZATION_TIME_DELTA_HOURS):
             print(f"'{name}' for {ticker} is up to date. Skipping.")
             continue
@@ -82,18 +89,28 @@ def run_optimization_for_ticker(ticker):
             print(f"Successfully updated parameters for {ticker}/{name}: {optimal}")
 
     conn.close()
+    return f"Successfully processed {ticker}"
 
 if __name__ == '__main__':
     # Create a dummy tickers.txt file for the example
-    # with open(TICKER_LIST_FILE, 'w') as f:
-    #     f.write("SPY\nAAPL\nMSFT\nGOOG\nAGG\nGLD\n")
+    with open(TICKER_LIST_FILE, 'w') as f:
+        f.write("SPY\nAAPL\nMSFT\nGOOG\nAGG\nGLD\nTSLA\nNVDA\nJPM\nJNJ\n")
         
     tickers = get_tickers_from_file(TICKER_LIST_FILE)
-    print(f"Starting batch optimization for {len(tickers)} tickers.")
+    print(f"Starting batch optimization for {len(tickers)} tickers using up to {MAX_WORKERS} CPU cores.")
     
-    # You can adjust the number of concurrent tickers to process based on your machine's power
-    # For now, we'll run them sequentially to avoid overwhelming the API, but threading is an option
-    for ticker in tickers:
-        run_optimization_for_ticker(ticker)
+    # Use ProcessPoolExecutor to run ticker optimizations in parallel
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all tasks to the pool
+        future_to_ticker = {executor.submit(run_optimization_for_ticker, ticker): ticker for ticker in tickers}
+        
+        # Process results as they are completed
+        for future in concurrent.futures.as_completed(future_to_ticker):
+            ticker = future_to_ticker[future]
+            try:
+                result = future.result()
+                print(f"Result for {ticker}: {result}")
+            except Exception as exc:
+                print(f'{ticker} generated an exception: {exc}')
         
     print("Batch optimization process complete.")

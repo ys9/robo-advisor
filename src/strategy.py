@@ -82,3 +82,85 @@ class MovingAverageCrossover(Strategy):
 
         # Signal values: 1.0 = Buy, -1.0 = Sell, 0.0 = Hold
         return signals
+
+
+class BuyAndHold(Strategy):
+    """
+    A simple buy and hold strategy. Buys on the first day and holds.
+    """
+    def __init__(self):
+        super().__init__(name="Buy and Hold")
+
+    def generate_signals(self, data):
+        """
+        Generates a single buy signal on the first day.
+
+        Args:
+            data (pd.DataFrame): DataFrame with historical price data.
+
+        Returns:
+            pd.DataFrame: A DataFrame with a 'signal' column.
+        """
+        signals = pd.DataFrame(index=data.index)
+        signals['price'] = data.iloc[:, 0]
+        signals['signal'] = 0.0
+        signals['signal'].iloc[0] = 1.0  # Buy on the first day
+        return signals
+
+class RSIStrategy(Strategy):
+    """
+    A strategy based on the Relative Strength Index (RSI).
+    """
+    def __init__(self, rsi_period=14, overbought_threshold=70, oversold_threshold=30):
+        super().__init__(name=f"RSI Strategy ({rsi_period}/{overbought_threshold}/{oversold_threshold})")
+        self.rsi_period = rsi_period
+        self.overbought_threshold = overbought_threshold
+        self.oversold_threshold = oversold_threshold
+
+    def generate_signals(self, data):
+        price_series = data.iloc[:, 0]
+        signals = pd.DataFrame(index=data.index)
+        signals['price'] = price_series
+
+        delta = price_series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()
+
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        signals['rsi'] = rsi
+        signals['signal'] = 0.0
+        signals.loc[signals['rsi'] < self.oversold_threshold, 'signal'] = 1.0
+        signals.loc[signals['rsi'] > self.overbought_threshold, 'signal'] = -1.0
+        
+        signals.drop(columns=['rsi'], inplace=True)
+        signals.fillna(0, inplace=True)
+        return signals
+
+class BollingerBandsStrategy(Strategy):
+    """
+    A strategy based on Bollinger Bands.
+    """
+    def __init__(self, window=20, std_dev=2):
+        super().__init__(name=f"Bollinger Bands ({window}/{std_dev})")
+        self.window = window
+        self.std_dev = std_dev
+
+    def generate_signals(self, data):
+        price_series = data.iloc[:, 0]
+        signals = pd.DataFrame(index=data.index)
+        signals['price'] = price_series
+
+        signals['middle_band'] = price_series.rolling(window=self.window).mean()
+        signals['std_dev'] = price_series.rolling(window=self.window).std()
+        signals['upper_band'] = signals['middle_band'] + (signals['std_dev'] * self.std_dev)
+        signals['lower_band'] = signals['middle_band'] - (signals['std_dev'] * self.std_dev)
+
+        signals['signal'] = 0.0
+        signals.loc[signals['price'] < signals['lower_band'], 'signal'] = 1.0
+        signals.loc[signals['price'] > signals['upper_band'], 'signal'] = -1.0
+        
+        signals.drop(columns=['middle_band', 'std_dev', 'upper_band', 'lower_band'], inplace=True)
+        signals.fillna(0, inplace=True)
+        return signals

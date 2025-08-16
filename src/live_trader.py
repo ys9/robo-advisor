@@ -208,7 +208,7 @@ def trigger_optimization(n, ticker):
 if __name__ == '__main__':
     # On startup, launch an optimization thread for each strategy
     for name, strategy_class in STRATEGIES.items():
-        thread = threading.Thread(target=optimize_single_strategy, args=('SPY', name, strategy_class))
+        thread = threading.Thread(target=optimize_single_strategy, args=('NVDA', name, strategy_class))
         app_state['optimization_threads'][name] = thread
         thread.start()
     

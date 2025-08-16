@@ -11,5 +11,18 @@
     "SPY_Moving Average Crossover": {
         "short_window": 25,
         "long_window": 170
+    },
+    "NVD_Bollinger Bands Strategy": {
+        "window": 20,
+        "std_dev": 3
+    },
+    "NVD_RSI Strategy": {
+        "rsi_period": 7,
+        "oversold_threshold": 20,
+        "overbought_threshold": 70
+    },
+    "NVD_Moving Average Crossover": {
+        "short_window": 35,
+        "long_window": 200
     }
 }

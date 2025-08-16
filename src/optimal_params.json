@@ -1,0 +1,15 @@
+{
+    "SPY_Bollinger Bands Strategy": {
+        "window": 20,
+        "std_dev": 2
+    },
+    "SPY_RSI Strategy": {
+        "rsi_period": 7,
+        "oversold_threshold": 30,
+        "overbought_threshold": 80
+    },
+    "SPY_Moving Average Crossover": {
+        "short_window": 25,
+        "long_window": 170
+    }
+}

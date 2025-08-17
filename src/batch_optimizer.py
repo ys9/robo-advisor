@@ -93,8 +93,8 @@ def run_optimization_for_ticker(ticker):
 
 if __name__ == '__main__':
     # Create a dummy tickers.txt file for the example
-    with open(TICKER_LIST_FILE, 'w') as f:
-        f.write("SPY\nAAPL\nMSFT\nGOOG\nAGG\nGLD\nTSLA\nNVDA\nJPM\nJNJ\n")
+    # with open(TICKER_LIST_FILE, 'w') as f:
+        # f.write("SPY\nAAPL\nMSFT\nGOOG\nAGG\nGLD\nTSLA\nNVDA\nJPM\nJNJ\n")
         
     tickers = get_tickers_from_file(TICKER_LIST_FILE)
     print(f"Starting batch optimization for {len(tickers)} tickers using up to {MAX_WORKERS} CPU cores.")
